@@ -40,3 +40,10 @@
 .read-the-docs {
   color: #888;
 }
+
+#resume-pdf * {
+  box-sizing: border-box;
+}
+.resume-section {
+  page-break-inside: avoid;
+}

@@ -1,13 +1,16 @@
 import { Routes, Route } from "react-router";
 import Builder from "./pages/Builder";
-import Auth from "./pages/Auth";
+
+import Home from "./pages/Home";
+import Templates from "./pages/Templates";
 function App() {
   return (
     <>
       <Routes>
-        <Route path="/" element={<Builder />} />
-        <Route path="/auth" element={<Auth />} />
-        <Route path="/builder" element={<Builder />} />
+        <Route path="/" element={<Home />} />
+        <Route path="/templates" element={<Templates />} />
+
+        <Route path="/builder/:tempId" element={<Builder />} />
       </Routes>
     </>
   );
