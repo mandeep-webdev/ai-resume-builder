@@ -18,7 +18,7 @@ const ExperienceStep = () => {
 
     try {
       const response = await axios.post(
-        "http://localhost:5001/api/improve-bullet",
+        `${import.meta.env.VITE_API_URL}/api/improve-bullet`,
         {
           bullet: currentText,
           role: selectedRole,

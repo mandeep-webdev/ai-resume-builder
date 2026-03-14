@@ -16,7 +16,8 @@ const ProjectsStep = () => {
       setLoadingIndex(index);
 
       const res = await fetch(
-        "http://localhost:5001/api/generate-project-description",
+        `${import.meta.env.VITE_API_URL}/api/generate-project-description`,
+
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -4,7 +4,6 @@ import axios from "axios";
 import type { ResumeFormValues } from "../../../types/resume";
 import ResumePreview from "../../resume/ResumePreview";
 
-
 interface ReviewResponse {
   overallSuggestions: string[];
   sections: {
@@ -72,7 +71,7 @@ const ReviewStep = () => {
 
     try {
       const response = await axios.post(
-        "http://localhost:5001/api/ats-analyze",
+        `${import.meta.env.VITE_API_URL}/api/iats-analyze`,
         {
           resumeData: values,
           jobDescription,
