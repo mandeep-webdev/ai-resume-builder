@@ -5,10 +5,12 @@ import multer from "multer";
 import fs from "fs";
 import { createRequire } from "module";
 import { analyzeATS } from "./services/atsAnalyzer.js";
+import https from "https";
+import "dotenv/config";
 
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
-
+const GROK_API_KEY = process.env.GROK_API_KEY;
 const app = express();
 const PORT = 5001;
 
@@ -35,6 +37,12 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
+const agent = new https.Agent({
+  keepAlive: true,
+  rejectUnauthorized: true, // always verify SSL cert
+  minVersion: "TLSv1.2",
+});
+
 app.post("/api/parse-resume", upload.single("file"), async (req, res) => {
   try {
     const filePath = req.file.path;
@@ -48,9 +56,14 @@ app.post("/api/parse-resume", upload.single("file"), async (req, res) => {
     console.log(cleanedText);
 
     // 2️⃣ Send extracted text to Ollama
-    const aiResponse = await axios.post("http://localhost:11434/api/generate", {
-      model: "llama3",
-      prompt: `
+    const aiResponse = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "user",
+            content: `
 Extract structured resume JSON from the text below.
 
 Return ONLY valid JSON.
@@ -66,35 +79,20 @@ Rules:
 - Only include links if they appear as complete URLs (must start with http or https).
 - Do NOT guess or reconstruct incomplete links.
 - If no valid link exists, leave the field empty.
-- Infer a suitable "targetRole" based on experience and skills.
-- targetRole must NOT be empty.
- - For targetRole:
-- Infer a suitable "targetRole" based on the candidate's experience, skills, and projects.
-- The role must be a short professional job title (2–4 words).
-- Prefer the most recent job title as primary signal.
-- If no clear job title exists, infer from dominant skills.
-- Examples:
-  - React + UI → "Frontend Developer"
-  - Python + SQL + Tableau → "Data Analyst"
-  - AWS + CI/CD + Docker → "DevOps Engineer"
-  - Figma + UX Research → "UI/UX Designer"
-  - SEO + Content + Analytics → "Digital Marketing Specialist"
-- targetRole must NOT be empty.
-- Do not invent unrelated roles.
-- Use standard industry job titles.
-- Avoid generic terms like "Professional" or "Specialist" unless clearly supported.
 
-For experience extraction:
-- Experience entries usually follow this pattern:
-  1st line: Job title (position)
-  2nd line: Company name
-  3rd line: Location (city, state, or Remote)
-  4th line: Dates
-- If a line contains words like "Remote", treat it as location.
-- If a line contains a month and year, treat it as date.
-- Do not use location as position.
-- Do not use company as position.
-- Ignore placeholder words like "Location", "Company Name", "Job Position".
+For targetRole:
+- Infer a suitable role from experience and skills
+- Must be a short professional title (2–4 words)
+- Prefer most recent job title
+- If unclear infer from skills
+
+Examples:
+React + UI → Frontend Developer
+Python + SQL → Data Analyst
+AWS + Docker → DevOps Engineer
+Figma + UX → UI/UX Designer
+
+Return this exact structure:
 
 {
   personalInfo: {
@@ -136,31 +134,40 @@ For experience extraction:
   ]
 }
 
-Resume:
+Resume Text:
 ${cleanedText}
 `,
-      stream: false,
-      format: "json",
-      temperature: 0.2,
-    });
+          },
+        ],
+        temperature: 0.2,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GROK_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
 
-    // 3️⃣ Parse AI response
+    // 3 Parse AI response
     let parsedData;
 
     try {
-      parsedData = JSON.parse(aiResponse.data.response);
+      let aiText = aiResponse.data.choices[0].message.content.trim();
 
-      // 🔥 Deep cleaning function
+      // remove markdown wrappers
+      aiText = aiText
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+      parsedData = JSON.parse(aiText);
+
       function deepClean(obj) {
-        if (Array.isArray(obj)) {
-          return obj.map(deepClean);
-        }
+        if (Array.isArray(obj)) return obj.map(deepClean);
 
         if (typeof obj === "object" && obj !== null) {
           const newObj = {};
-          for (const key in obj) {
-            newObj[key] = deepClean(obj[key]);
-          }
+          for (const key in obj) newObj[key] = deepClean(obj[key]);
           return newObj;
         }
 
@@ -171,26 +178,32 @@ ${cleanedText}
         return obj;
       }
 
-      // 🔥 URL validator
       function isValidUrl(val) {
         return (
           typeof val === "string" && /^https?:\/\/[^\s]+$/i.test(val.trim())
         );
       }
 
-      // 🔥 Apply deep cleaning first
       parsedData = deepClean(parsedData);
 
-      // 🔥 Clean personal links
-      if (!isValidUrl(parsedData.personalInfo?.github)) {
+      parsedData.personalInfo = parsedData.personalInfo || {};
+      parsedData.skills = parsedData.skills || [];
+      parsedData.experience = parsedData.experience || [];
+      parsedData.education = parsedData.education || [];
+      parsedData.projects = parsedData.projects || [];
+
+      if (!isValidUrl(parsedData.personalInfo.github)) {
         parsedData.personalInfo.github = "";
       }
 
-      if (!isValidUrl(parsedData.personalInfo?.linkedin)) {
+      if (!isValidUrl(parsedData.personalInfo.linkedin)) {
         parsedData.personalInfo.linkedin = "";
       }
     } catch (err) {
-      console.error("AI returned invalid JSON:", aiResponse.data.response);
+      console.error(
+        "AI returned invalid JSON:",
+        aiResponse.data.choices?.[0]?.message?.content,
+      );
 
       return res.status(500).json({
         error: "AI formatting issue. Try again.",
@@ -203,7 +216,7 @@ ${cleanedText}
     // 5️⃣ Send structured JSON to frontend
     return res.json(parsedData);
   } catch (error) {
-    console.error("🔥 FULL RESUME PARSE ERROR:");
+    console.error("FULL RESUME PARSE ERROR:");
     console.error(error);
     console.error("Message:", error.message);
     console.error("Stack:", error.stack);
@@ -227,39 +240,61 @@ app.post("/api/improve-bullet", async (req, res) => {
       return res.status(400).json({ error: "Bullet point is required" });
     }
 
-    const response = await axios.post("http://localhost:11434/api/generate", {
-      model: "llama3",
-      prompt: `
-      ROLE:
-      You are a senior resume writer and technical recruiter.
-      CONTEXT:
-      The candidate wrote the following responsibility in their resume.
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "user",
+            content: `
+ROLE:
+You are a senior resume writer and technical recruiter.
 
-      Text:
-      ${bullet}
-      Candidate Role:
-      ${role}
-      TASK:
-      Rewrite this into 3 strong resume bullet points.
+CONTEXT:
+The candidate wrote the following responsibility in their resume.
 
-     RULES:
-   - Start each bullet with •
-  - Use strong action verbs
-  - Focus on technical implementation
-  - Do NOT invent fake numbers or placeholders
-  - Do NOT write things like "[insert percentage]"
-  - Do NOT fabricate teamwork if not mentioned
-  - Maximum 25 words per bullet
-  - Return ONLY bullet points
-      `,
-      stream: false,
-    });
+Text:
+${bullet}
 
-    let improvedBullet = response.data.response.trim();
-    // remove ai explanations
+Candidate Role:
+${role}
+
+TASK:
+Rewrite this into 3 strong resume bullet points.
+
+RULES:
+- Start each bullet with •
+- Use strong action verbs
+- Focus on technical implementation
+- Do NOT invent fake numbers or placeholders
+- Do NOT write things like "[insert percentage]"
+- Do NOT fabricate teamwork if not mentioned
+- Maximum 25 words per bullet
+- Return ONLY bullet points
+`,
+          },
+        ],
+        temperature: 0.2,
+        stream: false,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GROK_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        httpsAgent: agent,
+      },
+    );
+
+    let improvedBullet = response.data.choices[0].message.content.trim();
+
+    // remove AI explanations
     improvedBullet = improvedBullet.replace(/Here.*?\n/i, "").trim();
+
+    // normalize bullets
     improvedBullet = improvedBullet.replace(/^\*\s*/gm, "• ");
-    // everyline starts with .
+
     improvedBullet = improvedBullet
       .split("\n")
       .map((line) => {
@@ -297,42 +332,61 @@ app.post("/api/generate-project-description", async (req, res) => {
       });
     }
 
-    const response = await axios.post("http://localhost:11434/api/generate", {
-      model: "llama3",
-      prompt: ` You are a senior software engineer and resume writer.
-      Your task is to generate strong resume bullet points for a project.
-      Project Name:
-      ${projectName}
-      Technologies Used:
-      ${technologies.join(", ")}
-      Candidate Role:
-      ${role}
-      Write exactly 3 resume bullet points describing the project.
-      STRICT RULES:
-      Each bullet MUST start with: •
-      Maximum 25 words per bullet
-      Focus on technical implementation and features
-      Mention relevant technologies when useful
-      Do NOT invent numbers or metrics
-      Do NOT add explanations
-      Do NOT add extra text
-`,
-      stream: false,
-    });
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "user",
+            content: `You are a senior software engineer and resume writer.
 
-    let output = response.data.response.trim();
+Your task is to generate strong resume bullet points for a project.
 
-    // Clean intro garbage if model adds anything
+Project Name:
+${projectName}
+
+Technologies Used:
+${technologies.join(", ")}
+
+Candidate Role:
+${role}
+
+Write exactly 3 resume bullet points describing the project.
+
+STRICT RULES:
+Each bullet MUST start with: •
+Maximum 25 words per bullet
+Focus on technical implementation and features
+Mention relevant technologies when useful
+Do NOT invent numbers or metrics
+Do NOT add explanations
+Do NOT add extra text`,
+          },
+        ],
+        temperature: 0.2,
+        stream: false,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${GROK_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+
+    let output = response.data.choices[0].message.content.trim();
+
+    // Remove unwanted intro text if model adds any
     output = output.replace(/Here.*?\n/i, "").trim();
 
-    // Normalize bullets
     const bullets = output
       .split("\n")
       .map((line) => {
         line = line.trim();
         if (!line) return null;
 
-        // Remove leading bullet symbols
+        // remove bullet symbol
         line = line.replace(/^[•\-\*]\s*/, "");
 
         return line;
@@ -341,7 +395,7 @@ app.post("/api/generate-project-description", async (req, res) => {
 
     res.json({ description: bullets });
   } catch (error) {
-    console.error("🔥 PROJECT AI ERROR:");
+    console.error("PROJECT AI ERROR:");
     console.error(error.response?.data || error.message);
 
     res.status(500).json({
@@ -442,19 +496,36 @@ MANDATORY SUMMARY RULES:
 Resume Data:
 ${JSON.stringify(resumeData)}
 `;
-    const response = await axios.post("http://localhost:11434/api/generate", {
-      model: "llama3",
-      prompt,
-      stream: false,
-      format: "json",
-      temperature: 0.2,
-    });
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.2,
+        stream: false,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${GROK_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
     let parsed;
 
     try {
-      parsed = JSON.parse(response.data.response);
+      const aiText = response.data.choices[0].message.content.trim();
+      parsed = JSON.parse(aiText);
     } catch (err) {
-      console.error("JSON Parse Error:", response.data.response);
+      console.error(
+        "JSON Parse Error:",
+        response.data.choices?.[0]?.message?.content,
+      );
 
       return res.json({
         overallSuggestions: ["AI response formatting issue. Try again."],

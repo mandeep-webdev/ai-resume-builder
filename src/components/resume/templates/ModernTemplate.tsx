@@ -92,7 +92,59 @@ function ExperienceItem({ job }: { job: any }) {
           ? job.description
           : job.description?.split("\n")
         )?.map((point: string, i: number) => (
-          <li key={i}>{point}</li>
+          <li key={i}>{point.replace(/^•\s*/, "")}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ProjectItem({ project }: { project: any }) {
+  const formatUrl = (url?: string) => {
+    if (!url) return "";
+    const trimmed = url.trim();
+    if (!trimmed) return "";
+    return trimmed.startsWith("http") ? trimmed : `https://${trimmed}`;
+  };
+
+  return (
+    <div className="mb-6">
+      {/* Row 1 */}
+      <div className="flex items-start justify-between">
+        <h3 className="font-semibold text-blue-900">{project.name}</h3>
+
+        <div className="text-xs space-x-2">
+          {project.liveUrl && (
+            <a
+              href={formatUrl(project.liveUrl)}
+              target="_blank"
+              className="text-blue-600 hover:underline"
+            >
+              Live
+            </a>
+          )}
+
+          {project.githubUrl && (
+            <a
+              href={formatUrl(project.githubUrl)}
+              target="_blank"
+              className="text-blue-600 hover:underline"
+            >
+              GitHub
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Technologies */}
+      <p className="text-xs text-gray-500 mt-1 italic">
+        {project.technologies?.join(" · ")}
+      </p>
+
+      {/* Description */}
+      <ul className="list-disc ml-5 text-sm mt-3 space-y-1">
+        {project.description?.map((point: string, i: number) => (
+          <li key={i}>{point.replace(/^[-•*]\s*/, "")}</li>
         ))}
       </ul>
     </div>
@@ -172,6 +224,13 @@ function ModernTemplate({ data }: Props) {
               <ExperienceItem key={i} job={job} />
             ))}
           </Section>
+          {data.projects?.length > 0 && (
+            <Section title="Projects">
+              {data.projects.map((project, i) => (
+                <ProjectItem key={i} project={project} />
+              ))}
+            </Section>
+          )}
         </div>
 
         {/* RIGHT COLUMN */}

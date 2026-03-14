@@ -1,4 +1,5 @@
 import React from "react";
+// https://smart-ai-resume-builder.netlify.app/
 import { Link, useNavigate } from "react-router-dom";
 import { Bot } from "lucide-react";
 const Navbar = () => {
