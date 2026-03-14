@@ -71,7 +71,7 @@ const ReviewStep = () => {
 
     try {
       const response = await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/iats-analyze`,
+        `${import.meta.env.VITE_API_URL}/api/ats-analyze`,
         {
           resumeData: values,
           jobDescription,

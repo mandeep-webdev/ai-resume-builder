@@ -58,10 +58,13 @@ const Home = () => {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch("http://localhost:5001/api/parse-resume", {
-        method: "POST",
-        body: formData,
-      });
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/parse-resume`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
 
       const parsedData = await response.json();
 
